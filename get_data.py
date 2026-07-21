@@ -11,6 +11,7 @@ Usage:
     python get_data.py update --browser chromium   # Non-interactive update
     python get_data.py initial --cookies-file cookies.json  # Use cookie file
     python get_data.py update --country bg --browser chromium  # Bulgaria
+    python get_data.py refresh --browser chromium  # Re-parse stored receipts
 """
 
 import argparse
@@ -18,7 +19,7 @@ import sys
 
 from cli import main
 from config import LidlConfig
-from workflows import initial_setup, update_data
+from workflows import initial_setup, refresh_data, update_data
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
     add_common_args(update_parser)
 
+    # Refresh subcommand
+    refresh_parser = subparsers.add_parser(
+        "refresh",
+        help="Re-fetch and re-parse receipts already stored (backfill)",
+    )
+    add_common_args(refresh_parser)
+
     return parser
 
 
@@ -98,6 +106,14 @@ if __name__ == "__main__":
             print("✓ Update erfolgreich abgeschlossen!")
         else:
             print("✗ Update fehlgeschlagen!")
+            sys.exit(1)
+
+    elif args.command == "refresh":
+        success = run_workflow(args, refresh_data)
+        if success:
+            print("✓ Refresh erfolgreich abgeschlossen!")
+        else:
+            print("✗ Refresh fehlgeschlagen!")
             sys.exit(1)
 
     else:

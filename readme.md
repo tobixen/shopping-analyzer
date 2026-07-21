@@ -128,6 +128,14 @@ You'll see a menu with options:
 2. Update Data - Add only new receipts
 3. Exit
 
+Non-interactively there is also a `refresh` command, which re-fetches and
+re-parses the receipts already in your JSON file (see
+[Totals and discounts](#totals-and-discounts)):
+
+```bash
+python get_data.py refresh --browser chromium
+```
+
 **Step 4: Choose your authentication method**
 
 Choose how you want to authenticate:
@@ -149,6 +157,42 @@ The program will automatically extract data from all your receipts (after 14.02.
 ### Output
 
 The script creates a `lidl_receipts.json` file containing all your receipt data, automatically sorted by date (newest first).
+
+#### Totals and discounts
+
+> [!IMPORTANT]
+> **`total_price` is the amount actually charged — net of all discounts.**
+> If you want the figure *before* discounts, read `total_price_gross`.
+
+Receipts print each discount on its own line, directly below the article it
+reduces. Those lines are parsed and attached to the item they belong to:
+
+| Field | Meaning |
+| --- | --- |
+| `total_price` | What the card was charged (gross − discounts) |
+| `total_price_gross` | Sum of the printed line totals, before discounts |
+| `total_price_no_saving` | Alias of `total_price_gross`, kept for compatibility |
+| `total_price_source` | Where `total_price` came from, for auditing |
+| `discount_total` | All discounts on the receipt |
+| `lidlplus_saved_amount` | The Lidl Plus coupon share of that |
+| `sticker_discount_amount` | The in-store markdown share of that |
+
+Each item additionally carries `line_total`, `net_total`, `discount_total` and
+a `discounts` list. Every discount records its `amount`, `label`,
+`promotion_id` and a `type`:
+
+- **`lidlplus_coupon`** — a Lidl Plus app coupon. These are what the receipt
+  footer totals up as "X EUR gespart" / "Ти спести X с Lidl Plus".
+- **`markdown`** — an in-store reduction sticker (short shelf life, damaged
+  packaging). *Not* a Lidl Plus saving and not part of that footer total.
+
+The two are kept apart because they behave differently: coupons are tied to a
+campaign, markdowns to the individual physical item.
+
+> [!NOTE]
+> Receipts collected before discount parsing existed recorded the gross total
+> as `total_price`. Lidl keeps receipts retrievable long after purchase, so
+> those records can be rebuilt in place with `python get_data.py refresh`.
 
 ### Data Analysis Dashboard
 
@@ -302,6 +346,44 @@ Nun wird das Programm automatisiert die Daten all Ihrer Kassenbons (nach dem 14.
 ### Ausgabe
 
 Nachdem der Prozess abgeschlossen ist, finden Sie alle extrahierten Daten in der `lidl_receipts.json` Datei. Diese Datei enthält alle Ihre Kassenbondaten, automatisch nach Datum sortiert (neueste zuerst), und ist gleichzeitig die Datenquelle für das Dashboard.
+
+#### Summen und Rabatte
+
+> [!IMPORTANT]
+> **`total_price` ist der tatsächlich belastete Betrag — abzüglich aller Rabatte.**
+> Für den Betrag *vor* Rabatten steht `total_price_gross` zur Verfügung.
+
+Kassenbons drucken jeden Rabatt in einer eigenen Zeile, direkt unter dem
+Artikel, den er reduziert. Diese Zeilen werden ausgewertet und dem
+zugehörigen Artikel zugeordnet:
+
+| Feld | Bedeutung |
+| --- | --- |
+| `total_price` | Tatsächlich belasteter Betrag (brutto − Rabatte) |
+| `total_price_gross` | Summe der gedruckten Zeilensummen, vor Rabatten |
+| `total_price_no_saving` | Alias von `total_price_gross`, aus Kompatibilitätsgründen |
+| `total_price_source` | Herkunft von `total_price`, zur Nachvollziehbarkeit |
+| `discount_total` | Alle Rabatte des Kassenbons |
+| `lidlplus_saved_amount` | Davon der Anteil der Lidl Plus Coupons |
+| `sticker_discount_amount` | Davon der Anteil der Rabattaufkleber |
+
+Jeder Artikel enthält zusätzlich `line_total`, `net_total`, `discount_total`
+sowie eine `discounts`-Liste. Jeder Rabatt speichert `amount`, `label`,
+`promotion_id` und einen `type`:
+
+- **`lidlplus_coupon`** — ein Lidl Plus Coupon. Diese ergeben zusammen den
+  Betrag in der Fußzeile ("X EUR gespart").
+- **`markdown`** — ein Rabattaufkleber im Markt (kurzes MHD, beschädigte
+  Verpackung). *Keine* Lidl Plus Ersparnis und nicht Teil dieser Fußzeile.
+
+Beide werden getrennt geführt, da sie sich unterschiedlich verhalten: Coupons
+hängen an einer Kampagne, Rabattaufkleber am einzelnen physischen Artikel.
+
+> [!NOTE]
+> Kassenbons, die vor der Rabattauswertung gesammelt wurden, enthielten den
+> Bruttobetrag als `total_price`. Da Lidl Kassenbons noch lange nach dem Kauf
+> bereitstellt, lassen sich diese Datensätze mit `python get_data.py refresh`
+> neu aufbauen.
 
 ### Datenanalyse-Dashboard
 

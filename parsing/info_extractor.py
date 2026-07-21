@@ -12,8 +12,11 @@ def extract_basic_receipt_info_from_html(
     receipt_data = {
         "id": receipt_id,
         "purchase_date": receipt_date,
-        "total_price": None,  # Final amount actually paid
-        "total_price_no_saving": None,  # Sum of all items without any savings
+        "total_price": None,  # Final amount actually charged (net of discounts)
+        "total_price_gross": None,  # Sum of printed line totals, before discounts
+        "total_price_no_saving": None,  # Alias of total_price_gross (compat)
+        "total_price_source": None,  # Provenance of total_price, for auditing
+        "discount_total": None,  # All discounts on the receipt
         "saved_amount": None,  # Regular savings (Preisvorteil, Rabatt)
         "sticker_discount_amount": None,  # RABATT X% sticker monetary amount
         "sticker_discount_pct": [],

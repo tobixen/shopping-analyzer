@@ -83,6 +83,70 @@ def collect_all_receipt_ids(session: requests.Session) -> List[str]:
     return all_receipt_ids
 
 
+def fetch_and_store_receipts(
+    session: requests.Session, receipt_ids: List[str]
+) -> Tuple[int, int, int]:
+    """
+    Fetch each receipt's details and write it to the JSON store.
+
+    Receipts already present are overwritten with the freshly parsed version,
+    so this doubles as a backfill for records parsed by an older version.
+
+    Args:
+        session: requests.Session with authentication
+        receipt_ids: Receipt IDs to fetch
+
+    Returns:
+        tuple: (processed_count, skipped_count, total_items)
+    """
+    processed_count = 0
+    skipped_count = 0
+    total_items = 0
+    error_count = 0
+    current_receipt = "-"
+    total = len(receipt_ids)
+
+    progress = ReceiptProgressDisplay()
+
+    def render(current: int) -> None:
+        progress.render(
+            ProgressState(
+                current=current,
+                total=total,
+                added=processed_count,
+                skipped=skipped_count,
+                errors=error_count,
+                items=total_items,
+                current_receipt=current_receipt,
+            )
+        )
+
+    render(0)
+
+    for i, receipt_id in enumerate(receipt_ids, 1):
+        current_receipt = receipt_id
+        render(i - 1)
+
+        receipt_data = get_receipt_details_and_html(session, receipt_id)
+
+        if receipt_data and receipt_data["items"]:
+            add_receipt_to_json(receipt_data, verbose=False)
+            processed_count += 1
+            total_items += len(receipt_data["items"])
+        else:
+            skipped_count += 1
+            error_count += 1
+
+        render(i)
+
+        # Add pause between requests to be respectful
+        time.sleep(LidlConfig.REQUEST_DELAY)
+
+    progress.close()
+
+    return processed_count, skipped_count, total_items
+
+
 def process_all_tickets(session: requests.Session) -> Tuple[int, int, int]:
     """
     Process all tickets efficiently by collecting IDs first, then fetching HTML.
@@ -93,9 +157,6 @@ def process_all_tickets(session: requests.Session) -> Tuple[int, int, int]:
     Returns:
         tuple: (processed_count, skipped_count, total_pages)
     """
-    processed_count = 0
-    skipped_count = 0
-
     # Load existing receipts to avoid duplicates
     existing_ids, _ = load_existing_receipts()
 
@@ -110,65 +171,8 @@ def process_all_tickets(session: requests.Session) -> Tuple[int, int, int]:
 
     print(f"Neue Kassenbons zu verarbeiten: {len(new_receipt_ids)}")
 
-    progress = ReceiptProgressDisplay()
-    total_new = len(new_receipt_ids)
-    total_items = 0
-    error_count = 0
-    current_receipt = "-"
-
-    progress.render(
-        ProgressState(
-            current=0,
-            total=total_new,
-            added=processed_count,
-            skipped=skipped_count,
-            errors=error_count,
-            items=total_items,
-            current_receipt=current_receipt,
-        )
+    processed_count, skipped_count, _ = fetch_and_store_receipts(
+        session, new_receipt_ids
     )
-
-    # Process each new receipt
-    for i, receipt_id in enumerate(new_receipt_ids, 1):
-        current_receipt = receipt_id
-        progress.render(
-            ProgressState(
-                current=i - 1,
-                total=total_new,
-                added=processed_count,
-                skipped=skipped_count,
-                errors=error_count,
-                items=total_items,
-                current_receipt=current_receipt,
-            )
-        )
-
-        # Get receipt details and HTML
-        receipt_data = get_receipt_details_and_html(session, receipt_id)
-
-        if receipt_data and receipt_data["items"]:
-            add_receipt_to_json(receipt_data, verbose=False)
-            processed_count += 1
-            total_items += len(receipt_data["items"])
-        else:
-            skipped_count += 1
-            error_count += 1
-
-        progress.render(
-            ProgressState(
-                current=i,
-                total=total_new,
-                added=processed_count,
-                skipped=skipped_count,
-                errors=error_count,
-                items=total_items,
-                current_receipt=current_receipt,
-            )
-        )
-
-        # Add pause between requests to be respectful
-        time.sleep(LidlConfig.REQUEST_DELAY)
-
-    progress.close()
 
     return processed_count, skipped_count, len(all_receipt_ids) // 10 + 1
