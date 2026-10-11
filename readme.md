@@ -126,11 +126,11 @@ You'll see a menu with options:
 
 1. Initial Setup - Extract all historical receipt data (choose this for first run)
 2. Update Data - Add only new receipts
-3. Exit
+3. Refresh - Re-fetch and re-parse the receipts already in your JSON file (see
+   [Totals and discounts](#totals-and-discounts))
+4. Exit
 
-Non-interactively there is also a `refresh` command, which re-fetches and
-re-parses the receipts already in your JSON file (see
-[Totals and discounts](#totals-and-discounts)):
+The same refresh is available as a command:
 
 ```bash
 python get_data.py refresh --browser chromium
@@ -321,7 +321,8 @@ Sie haben die Wahl zwischen:
 
 1. Initial Setup - Alle historischen Kassenbondaten extrahieren (für den ersten Durchlauf)
 2. Update Data - Nur neue Kassenbons hinzufügen
-3. Exit - Beenden
+3. Refresh - Vorhandene Kassenbons neu abrufen und parsen
+4. Exit - Beenden
 
 Wählen Sie "1" für das Initial Setup und bestätigen Sie mit der Enter-Taste.
 
