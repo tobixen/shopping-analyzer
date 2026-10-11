@@ -36,15 +36,25 @@ _AMOUNT_RE = re.compile(r"(\d+[,.]\d{2})\s*-|-\s*(\d+[,.]\d{2})")
 _PERCENT_RE = re.compile(r"(\d{1,3})\s*%")
 
 
+# Lidl Plus coupons carry a campaign template id, e.g.
+# "100001006-BG-TEMPLATE-BGAS000038349-1".
+_COUPON_ID_RE = re.compile(r"^\d+-[A-Z]{2}-TEMPLATE-")
+
+
 def classify_discount(promotion_id: str, label: str) -> str:
-    """Decide whether a discount is a Lidl Plus coupon or an in-store markdown."""
+    """Decide whether a discount is a Lidl Plus coupon, an in-store markdown or other.
+
+    Lidl Plus is only claimed on positive evidence (the label or a coupon
+    template id): an ordinary promotion such as a German "Preisvorteil" must
+    not be counted as a Lidl Plus saving.
+    """
     # Lidl uses synthetic "_DISCOUNT<n>" promotion ids for register-applied
-    # reduction stickers; real coupons carry a campaign template id.
+    # reduction stickers.
     if promotion_id.startswith("_DISCOUNT"):
         return "markdown"
     if "lidl plus" in label.lower():
         return "lidlplus_coupon"
-    if promotion_id:
+    if _COUPON_ID_RE.match(promotion_id):
         return "lidlplus_coupon"
     return "other"
 
@@ -57,6 +67,7 @@ def parse_discount_group(spans: List[Tag]) -> Optional[Dict[str, Any]]:
     """
     promotion_id = ""
     label_parts: List[str] = []
+    amount_line_label = ""
     amount: Optional[float] = None
 
     for span in spans:
@@ -66,6 +77,8 @@ def parse_discount_group(spans: List[Tag]) -> Optional[Dict[str, Any]]:
         match = _AMOUNT_RE.search(text)
         if match and amount is None:
             amount = to_float(match.group(1) or match.group(2))
+            # Label and amount may share one span ("Preisvorteil -0,10").
+            amount_line_label = text[: match.start()].strip("# ").strip()
         elif text:
             # The non-amount line carries the human-readable label, padded
             # with the '#' characters that frame boxed receipt text.
@@ -76,7 +89,8 @@ def parse_discount_group(spans: List[Tag]) -> Optional[Dict[str, Any]]:
     if amount is None:
         return None
 
-    label = " ".join(label_parts)
+    # A separate label line wins; otherwise use the text before the amount.
+    label = " ".join(label_parts) or amount_line_label
     discount: Dict[str, Any] = {
         "amount": to_str(amount),
         "type": classify_discount(promotion_id, label),

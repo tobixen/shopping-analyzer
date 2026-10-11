@@ -203,3 +203,104 @@ def test_receipt_without_discounts_has_equal_net_and_gross():
     assert result["total_price"] == "9,86"
     assert result["total_price_gross"] == "9,86"
     assert result["discount_total"] is None
+
+
+# --------------------------------------------------------------------------
+# Review fixes (2026-10-11)
+# --------------------------------------------------------------------------
+
+# The same article scanned twice in a row: two printed lines, two items.
+BG_RECEIPT_ADJACENT_REPEAT = """
+<span class="purchase_list">
+<span class="article" data-art-id="0044142" data-unit-price="1,02" data-tax-type="B" data-art-description="ST.BREW КРАФТ БИРА">ST.BREW КРАФТ БИРА                    1,02 B</span>
+<span class="article" data-art-id="0044142" data-unit-price="1,02" data-tax-type="B" data-art-description="ST.BREW КРАФТ БИРА">ST.BREW КРАФТ БИРА                    1,02 B</span>
+</span><span class="purchase_summary">
+<span id="purchase_summary_4" data-receipt-total="2.04" data-promotion-id="">ОБЩА СУМА                             2,04</span>
+</span>
+"""
+
+# Synthetic German layout, modelled on what the legacy parser expects: the
+# line total alone in a css_bold span, a deposit return as a negative line,
+# a Preisvorteil discount with label and amount in one span, and only the
+# printed "zu zahlen" total (no data-receipt-total).
+DE_RECEIPT = """
+<span class="purchase_list">
+<span class="article" data-art-id="1001" data-unit-price="1,49" data-art-description="Mineralwasser">Mineralwasser</span><span class="article css_bold" data-art-id="1001" data-unit-price="1,49" data-art-description="Mineralwasser">1,49</span>
+<span class="discount" data-promotion-id="X1">Preisvorteil -0,10</span>
+<span class="article" data-art-id="9001" data-art-quantity="-3" data-unit-price="0,25" data-art-description="Pfandrückgabe">-3 x 0,25</span><span class="article css_bold" data-art-id="9001" data-art-quantity="-3" data-unit-price="0,25" data-art-description="Pfandrückgabe">-0,75</span>
+<span class="article" data-art-id="1002" data-unit-price="2,00" data-art-description="Brot">Brot</span><span class="article css_bold" data-art-id="1002" data-unit-price="2,00" data-art-description="Brot">2,00</span>
+<span class="discount" data-promotion-id="200001000-DE-TEMPLATE-DESD0001-1">Lidl Plus Rabatt -0,50</span>
+</span><span class="purchase_summary">
+<span><span id="purchase_summary_1">zu zahlen</span><span class="css_bold">2,14</span></span>
+</span>
+"""
+
+
+def test_adjacent_repeat_is_two_items():
+    items = extract_receipt_items_from_html(make_soup(BG_RECEIPT_ADJACENT_REPEAT))
+    assert [i["line_total"] for i in items] == ["1,02", "1,02"]
+    data = parse_receipt_html(BG_RECEIPT_ADJACENT_REPEAT, "r", "2026-01-01", 0, "s")
+    assert data["total_price_gross"] == "2,04"
+
+
+def test_negative_line_total_keeps_its_sign():
+    items = _by_name(extract_receipt_items_from_html(make_soup(DE_RECEIPT)))
+    assert items["Pfandrückgabe"]["line_total"] == "-0,75"
+
+
+def test_german_receipt_totals_and_classification():
+    data = parse_receipt_html(DE_RECEIPT, "r", "2026-01-01", 0, "s")
+    items = _by_name(data["items"])
+    assert data["total_price_gross"] == "2,74"
+    assert data["total_price"] == "2,14"
+    assert data["total_price_source"] == "zu-zahlen"
+    assert data["saved_pfand"] == "0,75"
+    water = items["Mineralwasser"]["discounts"][0]
+    assert water["type"] == "other"
+    assert water["label"] == "Preisvorteil"
+    bread = items["Brot"]["discounts"][0]
+    assert bread["type"] == "lidlplus_coupon"
+    assert data["lidlplus_saved_amount"] == "0,50"
+    assert data["saved_amount"] == "0,10"
+
+
+def test_unknown_promotion_is_not_counted_as_lidl_plus():
+    from parsing.discount_extractor import classify_discount
+    assert classify_discount("X1", "Preisvorteil") == "other"
+    assert classify_discount("", "") == "other"
+    assert classify_discount("100001000-BG-TEMPLATE-BGSD000439939-1", "") == "lidlplus_coupon"
+    assert classify_discount("_DISCOUNT2", "ОТСТЪПКА 20%") == "markdown"
+
+
+def test_printed_total_beats_arithmetic_without_receipt_total():
+    html = DE_RECEIPT.replace('<span class="css_bold">2,14</span>', '<span class="css_bold">2,20</span>')
+    data = parse_receipt_html(html, "r", "2026-01-01", 0, "s")
+    assert data["total_price"] == "2,20"
+    assert data["total_price_source"] == "zu-zahlen"
+
+
+def test_legacy_sticker_discount_counted_once():
+    from parsing.receipt_parser import _apply_legacy_savings
+    receipt = {"saved_amount": "0,30", "sticker_discount_amount": 0.30,
+               "lidlplus_saved_amount": "1,00"}
+    assert round(_apply_legacy_savings(make_soup("<span></span>"), receipt, 0.0), 2) == 1.30
+
+
+def test_discount_before_first_article_is_reported(capsys):
+    html = """<span class="purchase_list">
+<span class="discount" data-promotion-id="_DISCOUNT1">ОТСТЪПКИ    0,10-B</span>
+<span class="article" data-art-id="1" data-unit-price="1,00" data-art-description="A">A    1,00 B</span>
+</span>"""
+    items = extract_receipt_items_from_html(make_soup(html))
+    assert items[0]["discounts"] == []
+    assert "0,10" in capsys.readouterr().out
+
+
+def test_discount_outside_purchase_list_is_not_attributed():
+    html = """<span class="purchase_list">
+<span class="article" data-art-id="1" data-unit-price="1,00" data-art-description="A">A    1,00 B</span>
+</span><span class="purchase_summary">
+<span class="discount" data-promotion-id="_DISCOUNT9">ОТСТЪПКИ    0,50-B</span>
+</span>"""
+    items = extract_receipt_items_from_html(make_soup(html))
+    assert items[0]["discounts"] == []

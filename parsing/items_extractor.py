@@ -9,13 +9,14 @@ from .money import to_float, to_str
 
 # A bare price on its own span, e.g. "12,77" (German layout puts the line
 # total in a dedicated css_bold span).
-_BARE_PRICE_RE = re.compile(r"^\d+[,.]\d{2}$")
-# A "quantity x unit price" calculation line, e.g. "4,000 x 1,32".  These are
-# never line totals.
-_CALC_LINE_RE = re.compile(r"\d+[,.]\d+\s*[xX]\s*\d")
+_BARE_PRICE_RE = re.compile(r"^-?\d+[,.]\d{2}$")
+# A "quantity x unit price" calculation line, e.g. "4,000 x 1,32", or a
+# deposit return "-3 x 0,25".  These are never line totals.
+_CALC_LINE_RE = re.compile(r"\d+[,.]\d+\s*[xX]\s*\d|^\s*-\d+\s*[xX]\s*\d")
 # A line total at the end of the description line, optionally followed by the
-# single-letter tax type, e.g. "БИСКВИТИ КАКАО    5,28 B".
-_TRAILING_TOTAL_RE = re.compile(r"(\d+[,.]\d{2})\s*[A-ZА-Я]?\s*$")
+# single-letter tax type, e.g. "БИСКВИТИ КАКАО    5,28 B".  A deposit return
+# prints a negative total.
+_TRAILING_TOTAL_RE = re.compile(r"(?<![\d,.])(-?\d+[,.]\d{2})\s*[A-ZА-Я]?\s*$")
 
 
 def _span_classes(span: Tag) -> List[str]:
@@ -23,6 +24,25 @@ def _span_classes(span: Tag) -> List[str]:
     if isinstance(classes, str):
         return [classes]
     return list(classes)
+
+
+def _span_line_total(span: Tag, bold_layout: bool) -> Optional[str]:
+    """The printed line total carried by this one span, if any.
+
+    In the bold layout (German) only the css_bold span holds the total; a
+    trailing price on another span is a unit price ("EUR/kg 1,99").
+    """
+    text = span.get_text().strip()
+    if "css_bold" in _span_classes(span):
+        if _BARE_PRICE_RE.match(text):
+            return text.replace(".", ",")
+        return None
+    if bold_layout or _CALC_LINE_RE.search(text):
+        return None
+    match = _TRAILING_TOTAL_RE.search(text)
+    if match:
+        return match.group(1).replace(".", ",")
+    return None
 
 
 def _extract_line_total(spans: List[Tag]) -> Optional[str]:
@@ -116,15 +136,21 @@ def extract_receipt_items_from_html(soup: BeautifulSoup) -> List[Dict[str, Any]]
     """
     items: List[Dict[str, Any]] = []
     try:
+        # Only the purchase list: a discount in the summary or footer is not
+        # a line discount and must not land on the last article.
+        container = soup.find("span", class_="purchase_list") or soup
         relevant_spans = [
             span
-            for span in soup.find_all("span")
+            for span in container.find_all("span")
             if {"article", "discount"} & set(_span_classes(span))
         ]
 
         if not any("article" in _span_classes(s) for s in relevant_spans):
             print("Keine Artikel-Spans gefunden")
             return items
+        bold_layout = any(
+            {"article", "css_bold"} <= set(_span_classes(s)) for s in relevant_spans
+        )
 
         # Each printed receipt line is one item.  A line's spans are
         # contiguous, so a *block* of consecutive spans sharing the same
@@ -139,6 +165,7 @@ def extract_receipt_items_from_html(soup: BeautifulSoup) -> List[Dict[str, Any]]
 
         current_key: Optional[str] = None
         previous_article_key: Optional[str] = None
+        block_has_total = False
         block_index = 0
         pending_discount: List[Tag] = []
         pending_promotion: Optional[str] = None
@@ -146,10 +173,15 @@ def extract_receipt_items_from_html(soup: BeautifulSoup) -> List[Dict[str, Any]]
         def flush_discount() -> None:
             """Finish the discount group being accumulated, if any."""
             nonlocal pending_discount, pending_promotion
-            if pending_discount and current_key is not None:
+            if pending_discount:
                 discount = parse_discount_group(pending_discount)
-                if discount:
+                if discount and current_key is not None:
                     discounts_by_key.setdefault(current_key, []).append(discount)
+                elif discount:
+                    print(
+                        f"Warnung: Rabatt {discount['amount']} vor dem ersten "
+                        f"Artikel kann keinem Artikel zugeordnet werden"
+                    )
             pending_discount = []
             pending_promotion = None
 
@@ -174,9 +206,14 @@ def extract_receipt_items_from_html(soup: BeautifulSoup) -> List[Dict[str, Any]]
                 continue
 
             article_key = f"{art_id}_{art_description}"
-            if article_key != previous_article_key:
+            # A printed line ends with its total, so the same article right
+            # after a total is a new line (scanned twice in a row).
+            if article_key != previous_article_key or block_has_total:
                 block_index += 1
                 previous_article_key = article_key
+                block_has_total = False
+            if _span_line_total(span, bold_layout) is not None:
+                block_has_total = True
 
             key = f"{block_index}_{article_key}"
             if key not in items_by_key:

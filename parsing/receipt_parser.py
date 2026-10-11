@@ -78,6 +78,23 @@ def _sum_pfand_savings(soup: BeautifulSoup) -> float:
     return pfand_savings
 
 
+def _pfand_outside_items(soup: BeautifulSoup, receipt_data: Dict[str, Any]) -> float:
+    """Record deposit returns in ``saved_pfand``; return the part gross lacks.
+
+    A deposit return printed as a negative article line is already in the
+    gross total, so only what is *not* there may still be subtracted.
+    """
+    pfand_savings = _sum_pfand_savings(soup)
+    if pfand_savings <= 0:
+        return 0.0
+    receipt_data["saved_pfand"] = to_str(pfand_savings)
+    in_items = -sum(
+        min(to_float(item.get("line_total"), 0.0) or 0.0, 0.0)
+        for item in receipt_data["items"]
+    )
+    return max(round(pfand_savings - in_items, 2), 0.0)
+
+
 def _apply_structural_discounts(
     receipt_data: Dict[str, Any], gross: float
 ) -> float:
@@ -117,25 +134,22 @@ def _apply_structural_discounts(
 
 
 def _apply_legacy_savings(
-    soup: BeautifulSoup, receipt_data: Dict[str, Any]
+    soup: BeautifulSoup, receipt_data: Dict[str, Any], pfand_outside_items: float
 ) -> float:
     """Sum the savings found by the German text-based extraction.
 
     Used only when the receipt HTML carries no ``span.discount`` markup.
+    ``saved_amount`` already includes the RABATT sticker amounts, so
+    ``sticker_discount_amount`` (their breakdown) is not added again.
     """
     total_savings = 0.0
 
-    for field in ("saved_amount", "lidlplus_saved_amount", "sticker_discount_amount"):
+    for field in ("saved_amount", "lidlplus_saved_amount"):
         value = to_float(receipt_data.get(field))
         if value:
             total_savings += value
 
-    pfand_savings = _sum_pfand_savings(soup)
-    if pfand_savings > 0:
-        receipt_data["saved_pfand"] = to_str(pfand_savings)
-        total_savings += pfand_savings
-
-    return total_savings
+    return total_savings + pfand_outside_items
 
 
 def parse_receipt_html(
@@ -182,20 +196,23 @@ def parse_receipt_html(
     # Prefer the structural per-line discounts; fall back to the legacy
     # German text heuristics only when the receipt has no discount markup.
     has_discount_markup = bool(soup.find("span", class_="discount"))
+    pfand_extra = _pfand_outside_items(soup, receipt_data)
     if has_discount_markup:
-        total_savings = _apply_structural_discounts(receipt_data, gross)
+        total_savings = _apply_structural_discounts(receipt_data, gross) + pfand_extra
     else:
-        total_savings = _apply_legacy_savings(soup, receipt_data)
+        total_savings = _apply_legacy_savings(soup, receipt_data, pfand_extra)
 
-    # Establish what was actually charged, most trustworthy source first.
+    # Establish what was actually charged, most trustworthy source first:
+    # the machine-readable total, then the printed "zu zahlen", and only
+    # then our own arithmetic.
     charged, source = _extract_charged_total(soup)
+    if charged is None and receipt_data.get("total_price"):
+        # info_extractor's German "zu zahlen" line.
+        charged, source = to_float(receipt_data["total_price"]), "zu-zahlen"
     if charged is None and gross > 0:
         computed = round(gross - total_savings, 2)
         if computed > 0:
             charged, source = computed, "gross-minus-discounts"
-    if charged is None and receipt_data.get("total_price"):
-        # info_extractor's German "zu zahlen" line.
-        charged, source = to_float(receipt_data["total_price"]), "zu-zahlen"
 
     if charged is not None:
         receipt_data["total_price"] = to_str(charged)
